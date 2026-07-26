@@ -1,6 +1,7 @@
 "use strict";
 
 const RESULT_PREFIX = "BATCH_RENAME_RESULT::";
+const REPOSITORY_URL = "https://github.com/chaxic/photopea-batch-rename";
 const defaultBuilder = {
   prefix: "",
   base: "",
@@ -290,17 +291,24 @@ function panelHtml() {
       <div class="panel-body">
         ${state.mode === "builder" ? builderHtml() : regexHtml()}
         ${previewHtml()}
-        <div class="status status-${state.statusKind}" role="status" aria-live="polite">
-          ${statusIcon()}
-          <span>${escapeHtml(state.statusText)}</span>
-        </div>
-        <div class="action-row">
-          <button class="secondary" type="button" data-run="preview" ${state.statusKind === "working" ? "disabled" : ""}>Preview</button>
-          <button class="primary" type="button" data-run="apply" ${state.statusKind === "working" ? "disabled" : ""}>Apply rename</button>
+        <div class="panel-actions">
+          <div class="status status-${state.statusKind}" role="status" aria-live="polite">
+            ${statusIcon()}
+            <span>${escapeHtml(state.statusText)}</span>
+          </div>
+          <div class="action-row">
+            <button class="secondary" type="button" data-run="preview" ${state.statusKind === "working" ? "disabled" : ""}>Preview</button>
+            <button class="primary" type="button" data-run="apply" ${state.statusKind === "working" ? "disabled" : ""}>Apply rename</button>
+          </div>
         </div>
       </div>
 
-      <footer class="panel-footer">Selected layers only · Nested folders supported</footer>
+      <footer class="panel-footer">
+        <span>Selected layers only · Nested folders supported</span>
+        <a href="${REPOSITORY_URL}" target="_blank" rel="noreferrer" title="View the Batch Rename source code on GitHub">
+          View source <span aria-hidden="true">↗</span>
+        </a>
+      </footer>
     </section>`;
 }
 
@@ -324,6 +332,7 @@ function installerHtml() {
             Download plugin
           </button>
           <a href="https://www.photopea.com" target="_blank" rel="noreferrer">Open Photopea <span aria-hidden="true">↗</span></a>
+          <a href="${REPOSITORY_URL}" target="_blank" rel="noreferrer">View source <span aria-hidden="true">↗</span></a>
         </div>
         <ol class="steps">
           <li><span>1</span><div><strong>Download the installer</strong><p>Save the small Batch Rename JSON file.</p></div></li>
