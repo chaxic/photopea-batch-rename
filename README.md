@@ -25,3 +25,9 @@ The plugin is plain HTML, CSS, and JavaScript hosted by GitHub Pages.
 Serve this folder through any static HTTP server. The full installer appears in
 a normal browser tab. When loaded by Photopea as an iframe, it automatically
 shows the compact plugin panel.
+
+## License
+
+Released under the [MIT License](LICENSE). Personal and commercial use,
+modification, and redistribution are allowed. If you distribute copies or
+substantial portions of the code, retain the copyright and license notice.
