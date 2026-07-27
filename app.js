@@ -1,7 +1,17 @@
 "use strict";
 
+const META = window.BATCH_RENAME_META;
+const CORE = window.BatchRenameCore;
 const RESULT_PREFIX = "BATCH_RENAME_RESULT::";
-const REPOSITORY_URL = "https://github.com/chaxic/photopea-batch-rename";
+
+if (!META || !CORE) {
+  const root = document.querySelector("#app");
+  if (root) {
+    root.textContent = "Batch Rename could not load its required files. Refresh the panel.";
+  }
+  throw new Error("Batch Rename dependencies are unavailable.");
+}
+
 const defaultBuilder = {
   prefix: "",
   base: "",
@@ -22,9 +32,13 @@ const state = {
     ignoreCase: false,
     global: true,
   },
+  stage: "idle",
   statusKind: "idle",
   statusText: "",
   samples: [],
+  activeRequestId: null,
+  activeOperation: null,
+  requestTimer: null,
 };
 
 const templates = {
@@ -63,22 +77,51 @@ function pluginBaseUrl() {
   return new URL("./", document.baseURI).href;
 }
 
-function makePhotopeaScript(mode, builder, regex, dryRun) {
-  const payload = JSON.stringify({ mode, builder, regex, dryRun });
+function versionedUrl(relativePath) {
+  const url = new URL(relativePath, pluginBaseUrl());
+  url.searchParams.set("v", META.version);
+  return url.href;
+}
+
+function createRequestId() {
+  if (window.crypto && typeof window.crypto.randomUUID === "function") {
+    return window.crypto.randomUUID();
+  }
+
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function settingsSnapshot() {
+  return {
+    mode: state.mode,
+    builder: { ...state.builder },
+    regex: { ...state.regex },
+  };
+}
+
+function makePhotopeaScript(settings, dryRun, requestId) {
+  const payload = JSON.stringify({ ...settings, dryRun, requestId });
+  const coreSource = [
+    CORE.padNumber,
+    CORE.compileRegex,
+    CORE.validateSettings,
+    CORE.collectSelectedLayers,
+    CORE.renameLayerName,
+    CORE.processSelectedLayers,
+  ]
+    .map((fn) => fn.toString())
+    .join("\n");
 
   return `
 (function () {
   var resultTag = ${JSON.stringify(RESULT_PREFIX)};
   var settings = ${payload};
 
-  function sendResult(result) {
-    app.echoToOE(resultTag + JSON.stringify(result));
-  }
+  ${coreSource}
 
-  function padNumber(value, width) {
-    var output = String(value);
-    while (output.length < width) output = "0" + output;
-    return output;
+  function sendResult(result) {
+    result.requestId = settings.requestId;
+    app.echoToOE(resultTag + JSON.stringify(result));
   }
 
   try {
@@ -87,74 +130,11 @@ function makePhotopeaScript(mode, builder, regex, dryRun) {
       return;
     }
 
-    var selectedLayers = [];
-
-    function collect(layers) {
-      for (var i = 0; i < layers.length; i++) {
-        var layer = layers[i];
-        if (layer.selected) selectedLayers.push(layer);
-        if (layer.layers && layer.layers.length > 0) collect(layer.layers);
-      }
-    }
-
-    collect(app.activeDocument.layers);
-
-    if (selectedLayers.length === 0) {
-      sendResult({ ok: false, message: "Select one or more layers first." });
-      return;
-    }
-
-    var expression = null;
-    if (settings.mode === "regex") {
-      if (!settings.regex.find) {
-        sendResult({ ok: false, message: "Enter a regular expression to find." });
-        return;
-      }
-      var flags = "";
-      if (settings.regex.global) flags += "g";
-      if (settings.regex.ignoreCase) flags += "i";
-      expression = new RegExp(settings.regex.find, flags);
-    }
-
-    var changed = 0;
-    var unchanged = 0;
-    var samples = [];
-
-    for (var index = 0; index < selectedLayers.length; index++) {
-      var target = selectedLayers[index];
-      var before = String(target.name);
-      var after = before;
-
-      if (settings.mode === "regex") {
-        after = before.replace(expression, settings.regex.replace);
-      } else {
-        var core = settings.builder.base ? settings.builder.base : before;
-        after = settings.builder.prefix + core + settings.builder.suffix;
-
-        if (settings.builder.numbering) {
-          after += settings.builder.separator +
-            padNumber(settings.builder.start + index, settings.builder.padding);
-        }
-      }
-
-      if (samples.length < 6) samples.push({ before: before, after: after });
-
-      if (after !== before) {
-        changed++;
-        if (!settings.dryRun) target.name = after;
-      } else {
-        unchanged++;
-      }
-    }
-
-    sendResult({
-      ok: true,
-      dryRun: settings.dryRun,
-      selected: selectedLayers.length,
-      changed: changed,
-      unchanged: unchanged,
-      samples: samples
-    });
+    sendResult(processSelectedLayers(
+      app.activeDocument.layers,
+      settings,
+      settings.dryRun
+    ));
   } catch (error) {
     sendResult({
       ok: false,
@@ -200,13 +180,14 @@ function previewHtml() {
 
 function builderHtml() {
   const builder = state.builder;
+  const disabled = state.statusKind === "working" ? " disabled" : "";
 
   return `
     <div class="template-row" aria-label="Templates">
       ${Object.entries(templates)
         .map(
           ([key, template]) =>
-            `<button type="button" data-template="${key}">${template.label}</button>`,
+            `<button type="button" data-template="${key}"${disabled}>${template.label}</button>`,
         )
         .join("")}
     </div>
@@ -214,22 +195,22 @@ function builderHtml() {
     <div class="field-grid">
       <label>
         <span>Prefix</span>
-        <input id="prefix" value="${escapeHtml(builder.prefix)}" placeholder="-e-" />
+        <input id="prefix" value="${escapeHtml(builder.prefix)}" placeholder="-e-"${disabled} />
       </label>
       <label>
         <span>Suffix</span>
-        <input id="suffix" value="${escapeHtml(builder.suffix)}" placeholder="_final" />
+        <input id="suffix" value="${escapeHtml(builder.suffix)}" placeholder="_final"${disabled} />
       </label>
     </div>
 
     <label class="stacked-field">
       <span>Base name <em>leave blank to keep current name</em></span>
-      <input id="base" value="${escapeHtml(builder.base)}" placeholder="Layer" />
+      <input id="base" value="${escapeHtml(builder.base)}" placeholder="Layer"${disabled} />
     </label>
 
     <div class="number-header">
       <label class="check-label">
-        <input id="numbering" type="checkbox" ${builder.numbering ? "checked" : ""} />
+        <input id="numbering" type="checkbox" ${builder.numbering ? "checked" : ""}${disabled} />
         <span>Sequential numbering</span>
       </label>
     </div>
@@ -237,9 +218,9 @@ function builderHtml() {
     ${
       builder.numbering
         ? `<div class="number-grid">
-            <label><span>Start</span><input id="start" type="number" min="0" value="${builder.start}" /></label>
-            <label><span>Digits</span><input id="padding" type="number" min="1" max="8" value="${builder.padding}" /></label>
-            <label><span>Separator</span><input id="separator" value="${escapeHtml(builder.separator)}" maxlength="8" /></label>
+            <label><span>Start</span><input id="start" type="number" min="0" value="${builder.start}"${disabled} /></label>
+            <label><span>Digits</span><input id="padding" type="number" min="1" max="8" value="${builder.padding}"${disabled} /></label>
+            <label><span>Separator</span><input id="separator" value="${escapeHtml(builder.separator)}" maxlength="8"${disabled} /></label>
           </div>`
         : ""
     }`;
@@ -247,23 +228,24 @@ function builderHtml() {
 
 function regexHtml() {
   const regex = state.regex;
+  const disabled = state.statusKind === "working" ? " disabled" : "";
 
   return `
     <label class="stacked-field">
       <span>Find pattern</span>
-      <input id="find" value="${escapeHtml(regex.find)}" placeholder="^old_(.*)$" spellcheck="false" />
+      <input id="find" value="${escapeHtml(regex.find)}" placeholder="^old_(.*)$" spellcheck="false"${disabled} />
     </label>
     <label class="stacked-field">
       <span>Replace with</span>
-      <input id="replace" value="${escapeHtml(regex.replace)}" placeholder="new_$1" spellcheck="false" />
+      <input id="replace" value="${escapeHtml(regex.replace)}" placeholder="new_$1" spellcheck="false"${disabled} />
     </label>
     <div class="regex-options">
       <label class="check-label">
-        <input id="global" type="checkbox" ${regex.global ? "checked" : ""} />
+        <input id="global" type="checkbox" ${regex.global ? "checked" : ""}${disabled} />
         <span>Replace all matches</span>
       </label>
       <label class="check-label">
-        <input id="ignore-case" type="checkbox" ${regex.ignoreCase ? "checked" : ""} />
+        <input id="ignore-case" type="checkbox" ${regex.ignoreCase ? "checked" : ""}${disabled} />
         <span>Ignore case</span>
       </label>
     </div>
@@ -273,19 +255,25 @@ function regexHtml() {
 }
 
 function panelHtml() {
+  const busy = state.statusKind === "working";
+  const disabled = busy ? " disabled" : "";
+
   return `
     <section class="plugin-panel" aria-label="Batch Rename plugin">
       <header class="panel-header">
         <div class="brand-mark" aria-hidden="true">ab</div>
-        <div>
-          <h1>Batch Rename</h1>
+        <div class="panel-heading">
+          <div class="panel-title-row">
+            <h1>${escapeHtml(META.name)}</h1>
+            <span class="version-badge">v${escapeHtml(META.version)}</span>
+          </div>
           <p>Rename selected layers</p>
         </div>
       </header>
 
       <div class="mode-tabs" role="tablist" aria-label="Rename mode">
-        <button class="${state.mode === "builder" ? "active" : ""}" data-mode="builder" role="tab" aria-selected="${state.mode === "builder"}">Build name</button>
-        <button class="${state.mode === "regex" ? "active" : ""}" data-mode="regex" role="tab" aria-selected="${state.mode === "regex"}">Regex</button>
+        <button class="${state.mode === "builder" ? "active" : ""}" data-mode="builder" role="tab" aria-selected="${state.mode === "builder"}"${disabled}>Build name</button>
+        <button class="${state.mode === "regex" ? "active" : ""}" data-mode="regex" role="tab" aria-selected="${state.mode === "regex"}"${disabled}>Regex</button>
       </div>
 
       <div class="panel-body">
@@ -297,15 +285,18 @@ function panelHtml() {
             <span>${escapeHtml(state.statusText)}</span>
           </div>
           <div class="action-row">
-            <button class="secondary" type="button" data-run="preview" ${state.statusKind === "working" ? "disabled" : ""}>Preview</button>
-            <button class="primary" type="button" data-run="apply" ${state.statusKind === "working" ? "disabled" : ""}>Apply rename</button>
+            <button class="secondary" type="button" data-run="preview"${disabled}>Preview</button>
+            <button class="primary" type="button" data-run="apply"${disabled}>Apply rename</button>
           </div>
         </div>
       </div>
 
       <footer class="panel-footer">
-        <span>Selected layers only · Nested folders supported</span>
-        <a href="${REPOSITORY_URL}" target="_blank" rel="noreferrer" title="View the Batch Rename source code on GitHub">
+        <div class="panel-footer-copy">
+          <span>Tested with Photopea ${escapeHtml(META.testedPhotopea)} · scripting v${escapeHtml(META.scriptingVersion)}</span>
+          <span>Selected layers only · Nested folders supported</span>
+        </div>
+        <a href="${META.repositoryUrl}" target="_blank" rel="noreferrer" title="View the Batch Rename source code on GitHub">
           View source <span aria-hidden="true">↗</span>
         </a>
       </footer>
@@ -313,11 +304,16 @@ function panelHtml() {
 }
 
 function installerHtml() {
-  const hostname = new URL(pluginBaseUrl()).host;
+  const hostname = new URL(META.pluginUrl).host;
+
   return `
     <div class="install-layout">
       <section class="install-copy">
-        <div class="eyebrow"><span class="eyebrow-dot"></span>Photopea plugin</div>
+        <div class="eyebrow">
+          <span class="eyebrow-dot"></span>
+          Photopea plugin
+          <span class="install-version">v${escapeHtml(META.version)}</span>
+        </div>
         <h1>Rename a whole layer stack in seconds.</h1>
         <p class="intro">
           Build consistent names with prefixes, suffixes and numbering—or use
@@ -332,13 +328,17 @@ function installerHtml() {
             Download plugin
           </button>
           <a href="https://www.photopea.com" target="_blank" rel="noreferrer">Open Photopea <span aria-hidden="true">↗</span></a>
-          <a href="${REPOSITORY_URL}" target="_blank" rel="noreferrer">View source <span aria-hidden="true">↗</span></a>
+          <a href="${META.repositoryUrl}" target="_blank" rel="noreferrer">View source <span aria-hidden="true">↗</span></a>
         </div>
         <ol class="steps">
           <li><span>1</span><div><strong>Download the installer</strong><p>Save the small Batch Rename JSON file.</p></div></li>
-          <li><span>2</span><div><strong>Open Window → Plugins</strong><p>Choose Add Plugin at the top of Photopea’s plugin window.</p></div></li>
-          <li><span>3</span><div><strong>Select the JSON file</strong><p>Batch Rename will appear in Photopea’s plugin rail.</p></div></li>
+          <li><span>2</span><div><strong>Open Window → Plugins</strong><p>Choose Add Plugin at the top of Photopea's plugin window.</p></div></li>
+          <li><span>3</span><div><strong>Select the JSON file</strong><p>Batch Rename will appear in Photopea's plugin rail.</p></div></li>
         </ol>
+        <p class="compatibility-note">
+          Tested with Photopea ${escapeHtml(META.testedPhotopea)} · scripting v${escapeHtml(META.scriptingVersion)}
+          · verified ${escapeHtml(META.verifiedLabel)}
+        </p>
         <p class="privacy-note">Runs locally in Photopea. No document or layer data is uploaded.</p>
       </section>
       <section class="preview-wrap" aria-label="Plugin preview">
@@ -358,6 +358,7 @@ function render() {
 }
 
 function resetFeedback(message) {
+  state.stage = "idle";
   state.statusKind = "idle";
   state.statusText = message || "Preview your changes before applying.";
   state.samples = [];
@@ -390,6 +391,25 @@ function updateRegexFromInputs() {
     document.querySelector("#ignore-case")?.checked ?? state.regex.ignoreCase;
 }
 
+function clearActiveRequest() {
+  if (state.requestTimer !== null) {
+    window.clearTimeout(state.requestTimer);
+  }
+
+  state.requestTimer = null;
+  state.activeRequestId = null;
+  state.activeOperation = null;
+}
+
+function failActiveRequest(message) {
+  clearActiveRequest();
+  state.stage = "error";
+  state.statusKind = "error";
+  state.statusText = message;
+  state.samples = [];
+  render();
+}
+
 function runRename(dryRun) {
   if (!state.embedded) {
     state.statusKind = "idle";
@@ -398,36 +418,58 @@ function runRename(dryRun) {
     return;
   }
 
+  if (state.statusKind === "working") return;
+
   if (state.mode === "builder") updateBuilderFromInputs();
   else updateRegexFromInputs();
 
-  if (state.mode === "regex" && !state.regex.find) {
+  const settings = settingsSnapshot();
+  const validation = CORE.validateSettings(settings);
+  if (!validation.ok) {
+    state.stage = "error";
     state.statusKind = "error";
-    state.statusText = "Enter a regular expression to find.";
+    state.statusText = validation.message;
+    state.samples = [];
     render();
     return;
   }
 
+  const requestId = createRequestId();
+  state.activeRequestId = requestId;
+  state.activeOperation = dryRun ? "preview" : "apply";
+  state.stage = "reading selection";
   state.statusKind = "working";
-  state.statusText = dryRun ? "Building preview…" : "Renaming selected layers…";
+  state.statusText = dryRun
+    ? "Reading selected layers for preview…"
+    : "Renaming selected layers…";
   render();
-  window.parent.postMessage(
-    makePhotopeaScript(
-      state.mode,
-      state.builder,
-      state.regex,
-      dryRun,
-    ),
-    "*",
-  );
+
+  state.requestTimer = window.setTimeout(() => {
+    if (state.activeRequestId !== requestId) return;
+    failActiveRequest(
+      "Photopea did not respond within 15 seconds. Close and reopen the panel, then try again.",
+    );
+  }, META.requestTimeoutMs);
+
+  try {
+    window.parent.postMessage(
+      makePhotopeaScript(settings, dryRun, requestId),
+      "*",
+    );
+  } catch (error) {
+    failActiveRequest(
+      error && error.message
+        ? `Could not contact Photopea: ${error.message}`
+        : "Could not contact Photopea.",
+    );
+  }
 }
 
 function downloadInstaller() {
-  const base = pluginBaseUrl();
   const manifest = {
-    name: "Batch Rename",
-    url: base,
-    icon: `===${new URL("icon.svg", base).href}`,
+    name: META.name,
+    url: versionedUrl("./"),
+    icon: `===${versionedUrl("icon.svg")}`,
   };
   const blob = new Blob([JSON.stringify(manifest, null, 2)], {
     type: "application/json",
@@ -437,7 +479,7 @@ function downloadInstaller() {
   anchor.href = blobUrl;
   anchor.download = "batch-rename-photopea.json";
   anchor.click();
-  setTimeout(() => URL.revokeObjectURL(blobUrl), 0);
+  window.setTimeout(() => URL.revokeObjectURL(blobUrl), 0);
 }
 
 function bindEvents() {
@@ -479,9 +521,7 @@ function bindEvents() {
     input.addEventListener("input", () => {
       if (state.mode === "builder") updateBuilderFromInputs();
       else updateRegexFromInputs();
-      state.statusKind = "idle";
-      state.statusText = "Preview your changes before applying.";
-      state.samples = [];
+      resetFeedback();
     });
   });
 }
@@ -498,7 +538,17 @@ window.addEventListener("message", (event) => {
 
   try {
     const result = JSON.parse(event.data.slice(RESULT_PREFIX.length));
+    if (
+      !state.activeRequestId ||
+      result.requestId !== state.activeRequestId
+    ) {
+      return;
+    }
+
+    clearActiveRequest();
+
     if (!result.ok) {
+      state.stage = "error";
       state.statusKind = "error";
       state.statusText =
         result.message || "Photopea could not process the layer names.";
@@ -507,8 +557,10 @@ window.addEventListener("message", (event) => {
       return;
     }
 
+    state.stage = "complete";
     state.statusKind = "ok";
     state.samples = result.samples || [];
+
     if (result.dryRun) {
       state.statusText = result.changed
         ? `${result.changed} of ${result.selected} selected layer(s) will change.`
@@ -519,10 +571,10 @@ window.addEventListener("message", (event) => {
         : "No selected layer names needed changing.";
     }
   } catch {
-    state.statusKind = "error";
-    state.statusText = "Photopea returned an unreadable result.";
-    state.samples = [];
+    failActiveRequest("Photopea returned an unreadable result.");
+    return;
   }
+
   render();
 });
 
