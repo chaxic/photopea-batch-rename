@@ -19,7 +19,8 @@
     var flags = "";
     if (regex.global) flags += "g";
     if (regex.ignoreCase) flags += "i";
-    return new RegExp(regex.find, flags);
+    // Photopea hangs on the RegExp constructor with `new`; call it as a function.
+    return RegExp(regex.find, flags);
   }
 
   function validateSettings(settings) {

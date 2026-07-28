@@ -123,6 +123,25 @@ test("regex mode supports global, ignore-case, and capture groups", () => {
   assert.equal(layers[0].name, "vegetation_TREE_04");
 });
 
+test("compileRegex avoids Photopea-hanging new RegExp constructor", () => {
+  const source = require("node:fs").readFileSync(
+    require("node:path").join(__dirname, "..", "rename-core.js"),
+    "utf8",
+  );
+
+  assert.match(source, /return RegExp\(regex\.find, flags\);/);
+  assert.doesNotMatch(source, /new RegExp\(/);
+
+  const expression = core.compileRegex({
+    find: "element",
+    replace: "building",
+    global: true,
+    ignoreCase: false,
+  });
+
+  assert.equal("element_07".replace(expression, "building"), "building_07");
+});
+
 test("invalid regex and empty selection return actionable errors", () => {
   const invalid = {
     mode: "regex",

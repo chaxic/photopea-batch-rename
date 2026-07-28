@@ -11,11 +11,11 @@
 
   return Object.freeze({
     name: "Batch Rename",
-    version: "1.0.0",
+    version: "1.0.1",
     testedPhotopea: "5.6",
     scriptingVersion: "30",
-    verifiedDate: "2026-07-27",
-    verifiedLabel: "27 July 2026",
+    verifiedDate: "2026-07-28",
+    verifiedLabel: "28 July 2026",
     requestTimeoutMs: 15000,
     repositoryUrl: "https://github.com/chaxic/photopea-batch-rename",
     pluginUrl: "https://chaxic.github.io/photopea-batch-rename/",

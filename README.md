@@ -3,9 +3,9 @@
 A lightweight, client-side Photopea sidebar plugin for renaming selected
 layers with templates, numbering, and regular expressions.
 
-**Current version:** v1.0.0  
+**Current version:** v1.0.1  
 **Compatibility:** Tested with Photopea 5.6 · scripting v30  
-**Last verified:** 27 July 2026
+**Last verified:** 28 July 2026
 
 ## Features
 
@@ -20,11 +20,11 @@ layers with templates, numbering, and regular expressions.
 
 ## Install
 
-1. Open the [v1.0.0 installer page](https://chaxic.github.io/photopea-batch-rename/?v=1.0.0).
+1. Open the [v1.0.1 installer page](https://chaxic.github.io/photopea-batch-rename/?v=1.0.1).
 2. Download `batch-rename-photopea.json`.
 3. In Photopea, open **Window → Plugins → Add Plugin**.
 4. Select the downloaded JSON file.
-5. Open the panel and confirm that it shows **v1.0.0**.
+5. Open the panel and confirm that it shows **v1.0.1**.
 
 The plugin is plain HTML, CSS, and JavaScript hosted by GitHub Pages.
 
@@ -42,9 +42,18 @@ effects, visibility, and document dimensions are not modified.
 
 ## Development
 
-Serve this folder through any static HTTP server. The full installer appears in
-a normal browser tab. When loaded by Photopea as an iframe, it automatically
-shows the compact plugin panel.
+Serve this folder through the local static server:
+
+```bash
+npm run dev
+```
+
+That listens on `http://127.0.0.1:4179/`. Open Photopea with a hash config pointing
+at that URL (see `plugin.local.json`), or use **Window → Plugins → Add Plugin**
+with `plugin.local.json`. Confirm the panel shows **v1.0.1**.
+
+Opening the local URL in a normal browser tab shows the installer page, not a
+valid Photopea panel test.
 
 No build step or runtime dependency is required. Run the automated checks with:
 

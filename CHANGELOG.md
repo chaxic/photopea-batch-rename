@@ -2,6 +2,19 @@
 
 All notable changes to Batch Rename for Photopea are documented here.
 
+## [1.0.1] - 2026-07-28
+
+### Fixed
+
+- Regex mode no longer hangs in Photopea. The script engine freezes on
+  `new RegExp(...)`; compile patterns with `RegExp(...)` instead.
+
+### Verification
+
+- Reproduced the hang with `new RegExp("element")` in live Photopea scripting.
+- Confirmed `RegExp("element", "g")` renames correctly in Photopea.
+- Automated checks passed on 28 July 2026.
+
 ## [1.0.0] - 2026-07-27
 
 ### Added
